@@ -1,0 +1,14 @@
+{
+    "spider": {
+        "name": "Spider",
+        "hp": 3,
+        "hx": 0.75,
+        "hy": 0.75
+    },
+    "bullet": {
+        "name": "Bullet",
+        "hurtable": false,
+        "hx": 0.50,
+        "hy": 0.50
+    }
+}

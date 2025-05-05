@@ -1,0 +1,12 @@
+{
+    "sword": {
+        "name": "Sword",
+        "desc": "A good ol' sword made of tough iron.\nGreat for getting rid of large amounts\nof weak enemies.",
+        "cooldown": 18
+    },
+    "shotgun": {
+        "name": "Shotgun",
+        "desc": "A great weapon for dealing with hoardes\nof tough opponents at close range.",
+        "cooldown": 20
+    }
+}
