@@ -52,6 +52,9 @@ class Player:
         self.rx : int = self.save.get("rx", 0)
         self.ry : int = self.save.get("ry", 0)
 
+        self.kb : int = 0
+        self.kbangle : int = 0
+
         self.w : float = 0.75
         self.h : float = 0.75
 
@@ -79,6 +82,10 @@ class Player:
                 FRAMERATE // 4,
             )
 
+    def knockback(self, force : int, angle : int):
+        self.kb += force
+        self.kbangle = angle
+
     def tick(self):
 
         if not self.getRoom():
@@ -87,6 +94,11 @@ class Player:
 
         if self.cooldown > 0:
             self.cooldown -= 1
+
+        if self.kb > 0:
+            self.x += 0.15 * self.kb * math.cos(self.kbangle / 180 * math.pi)
+            self.y += 0.15 * self.kb * math.sin(self.kbangle / 180 * math.pi)
+            self.kb -= 1
 
         for block in self.getRoom().blocks:
             w, a, s, d = block.collides(self)
@@ -149,12 +161,25 @@ class Entity:
         self.hp : int = self.maxHP
         self.hurtable : bool = self._data.get("hurtable", True)
 
+        self.kb : int = 0
+        self.kbangle : int = 0
+
         self.w : float = self._data.get("hx", 0.75)
         self.h : float = self._data.get("hy", 0.75)
 
         self.destroy : bool = False
 
+    def knockback(self, force : int, angle : int):
+        self.kb += force
+        self.kbangle = angle
+
     def tick(self):
+
+        if self.kb > 0:
+            self.x += 0.15 * self.kb * math.cos(self.kbangle / 180 * math.pi)
+            self.y += 0.15 * self.kb * math.sin(self.kbangle / 180 * math.pi)
+            self.kb -= 1
+
         for block in self.arena.player.getRoom().blocks:
             w, a, s, d = block.collides(self)
 
@@ -178,6 +203,10 @@ class Entity:
     def tick_null(self):
         return
     def damage_null(self, amount : int):
+        self.hp -= amount
+        if self.hp <= 0:
+            self.hp = 0
+            self.destroy = True
         return amount
 
     def tick_spider(self):
@@ -203,11 +232,35 @@ class Entity:
         if self.meta["cooldown"] > 0:
             self.meta["cooldown"] -= 1
 
+    def tick_big_spider(self):
+        if not "cooldown" in self.meta.keys():
+            self.meta["cooldown"] = 0
+
+        angle = math.atan2(
+            self.y - self.arena.player.y,
+            self.x - self.arena.player.x,
+        )
+        distance = math.sqrt(
+            (self.y - self.arena.player.y) ** 2 + (self.x - self.arena.player.x) ** 2,
+        )
+
+        if distance <= 0.75:
+            if self.meta["cooldown"] == 0:
+                self.arena.player.damage(3)
+                self.meta["cooldown"] = FRAMERATE * 2
+        else:
+            self.x += -0.075 * math.cos(angle)
+            self.y += -0.075 * math.sin(angle)
+
+        if self.meta["cooldown"] > 0:
+            self.meta["cooldown"] -= 1
+
     def damage_spider(self, amount : int):
         self.hp -= amount
         if self.hp <= 0:
             self.hp = 0
             self.destroy = True
+        return amount
 
     def tick_bullet(self):
         if not "direction" in self.meta.keys():
@@ -234,6 +287,7 @@ class Entity:
             )
             if distance <= (entity.w + entity.h) / 2:
                 entity.damage(2)
+                entity.knockback(2, self.meta["direction"])
                 self.destroy = True
                 return
 
@@ -313,7 +367,7 @@ class Item:
             player.x - pos[0],
         ) * 180 / math.pi##
 
-        for t in range(-12, 12 + 1, 3):
+        for t in range(-12, 12 + 1, 4):
             theta = (angle + t)
             player.arena.newEntity(
                 "bullet",

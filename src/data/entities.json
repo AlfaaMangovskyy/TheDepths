@@ -5,6 +5,12 @@
         "hx": 0.75,
         "hy": 0.75
     },
+    "big_spider": {
+        "name": "Big Spider",
+        "hp": 75,
+        "hx": 1.00,
+        "hy": 1.00
+    },
     "bullet": {
         "name": "Bullet",
         "hurtable": false,

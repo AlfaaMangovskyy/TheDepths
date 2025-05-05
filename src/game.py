@@ -16,6 +16,7 @@ arena.newEntity("spider", 5, 5, {})
 arena.newEntity("spider", -5, 5, {})
 arena.newEntity("spider", 5, -5, {})
 arena.newEntity("spider", -5, -5, {})
+arena.newEntity("big_spider", -9, -5, {})
 arena.player.item = Item("shotgun")
 
 running = True
