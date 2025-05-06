@@ -2,6 +2,10 @@ import math
 import random
 import json
 import os
+# import sys
+
+# ARGS = {}
+# for i in range()
 
 WIDTH = 1920
 HEIGHT = 1080
@@ -40,6 +44,9 @@ class Block:
 
         return w, a, s, d
 
+    def __repr__(self) -> str:
+        return f"Block({self.x}, {self.y}, {self.w}, {self.h})"
+
 
 
 class Player:
@@ -58,7 +65,7 @@ class Player:
         self.w : float = 0.75
         self.h : float = 0.75
 
-        self.speed : float = 0.35
+        self.speed : float = 0.30
         self.item : Item | None = None
 
         self.cooldown : int = 0
@@ -106,9 +113,16 @@ class Player:
 
 class Room:
 
-    def __init__(self, rx : int, ry : int, blocks : list[Block] = []):
+    def __init__(self, rx : int, ry : int, w : int, h : int, blocks : list[Block] = []):
         self.rx, self.ry = rx, ry
+        self.w, self.h = w, h
         self.blocks : list[Block] = blocks
+
+        self.entities : list[Entity] = []
+        self.ew, self.ea, self.es, self.ed = False, False, False, False
+
+    def __repr__(self) -> str:
+        return f"Room({self.rx}, {self.ry}, {self.blocks})"
 
 
 class Camera:
@@ -118,14 +132,28 @@ class Camera:
         self.x : float = player.x
         self.y : float = player.y
 
+        self.shakeTimer : int = 0
+        self.shakeForce : float = 0.0
+
     def tick(self):
         self.x = self.player.x
         self.y = self.player.y
 
+        if self.shakeTimer > 0:
+            self.shakeTimer -= 1
+            if self.shakeTimer == 0:
+                self.shakeForce = 0.0
+
+    def shake(self, force : float, time : int):
+        if force > self.shakeForce:
+            self.shakeForce = force
+        if time > self.shakeTimer:
+            self.shakeTimer += time
+
     def get(self) -> tuple[float, float]:
         return (
-            self.x,
-            self.y,
+            self.x + random.randint(-10, 10) / 100 * self.shakeForce,
+            self.y + random.randint(-10, 10) / 100 * self.shakeForce,
         )
 
 class Particle:
@@ -160,6 +188,7 @@ class Entity:
         self.maxHP : int = self._data.get("hp", 3)
         self.hp : int = self.maxHP
         self.hurtable : bool = self._data.get("hurtable", True)
+        self.killCountdown : int = 0
 
         self.kb : int = 0
         self.kbangle : int = 0
@@ -180,11 +209,27 @@ class Entity:
             self.y += 0.15 * self.kb * math.sin(self.kbangle / 180 * math.pi)
             self.kb -= 1
 
+        if self.killCountdown > 0:
+            self.killCountdown -= 1
+            if self.killCountdown == 0:
+                self.destroy = True
+                return
+
         for block in self.arena.player.getRoom().blocks:
             w, a, s, d = block.collides(self)
 
+        if self.x < -self.arena.player.getRoom().w // 2 + self.w / 2:
+            self.x = -self.arena.player.getRoom().w // 2 + self.w / 2
+        if self.x > self.arena.player.getRoom().w // 2 - self.w / 2:
+            self.x = self.arena.player.getRoom().w // 2 - self.w / 2
+        if self.y < -self.arena.player.getRoom().h // 2 + self.h / 2:
+            self.y = -self.arena.player.getRoom().h // 2 + self.h / 2
+        if self.y > self.arena.player.getRoom().h // 2 - self.h / 2:
+            self.y = self.arena.player.getRoom().h // 2 - self.h / 2
+
         self.timer += 1
-        return getattr(self, f"tick_{self.id}", self.tick_null)()
+        if self.killCountdown == 0:
+            return getattr(self, f"tick_{self.id}", self.tick_null)()
 
     def damage(self, amount : int):
         if not self.hurtable: return
@@ -200,14 +245,20 @@ class Entity:
 
         return getattr(self, f"damage_{self.id}", self.damage_null)(amount)
 
+    def animate(self):
+        return getattr(self, f"animate_{self.id}", self.animate_null)()
+
     def tick_null(self):
         return
     def damage_null(self, amount : int):
         self.hp -= amount
         if self.hp <= 0:
             self.hp = 0
-            self.destroy = True
+            self.killCountdown = FRAMERATE // 3
+            self.arena.camera.shake(1.5, FRAMERATE // 10)
         return amount
+    def animate_null(self):
+        return f"entity_{self.id}"
 
     def tick_spider(self):
         if not "cooldown" in self.meta.keys():
@@ -255,12 +306,12 @@ class Entity:
         if self.meta["cooldown"] > 0:
             self.meta["cooldown"] -= 1
 
-    def damage_spider(self, amount : int):
-        self.hp -= amount
-        if self.hp <= 0:
-            self.hp = 0
-            self.destroy = True
-        return amount
+    # def damage_spider(self, amount : int):
+    #     self.hp -= amount
+    #     if self.hp <= 0:
+    #         self.hp = 0
+    #         self.destroy = True
+    #     return amount
 
     def tick_bullet(self):
         if not "direction" in self.meta.keys():
@@ -280,14 +331,15 @@ class Entity:
                     self.destroy = True
                     return
 
-        for entity in self.arena.entities:
+        for entity in self.arena.player.getRoom().entities:
             if not entity.hurtable: continue
             distance = math.sqrt(
                 (self.x - entity.x) ** 2 + (self.y - entity.y) ** 2,
             )
             if distance <= (entity.w + entity.h) / 2:
                 entity.damage(2)
-                entity.knockback(2, self.meta["direction"])
+                entity.knockback(1, self.meta["direction"])
+                self.arena.camera.shake(1.0, FRAMERATE // 10)
                 self.destroy = True
                 return
 
@@ -317,7 +369,7 @@ class Item:
         )
 
         hit = False
-        for target in player.arena.entities:
+        for target in player.arena.player.getRoom().entities:
             distance = math.sqrt(
                 (player.y - pos[1]) ** 2 + (player.x - pos[0]) ** 2,
             )
@@ -367,6 +419,9 @@ class Item:
             player.x - pos[0],
         ) * 180 / math.pi##
 
+        player.knockback(2, angle)
+
+        player.arena.camera.shake(0.8, FRAMERATE // 10)
         for t in range(-12, 12 + 1, 4):
             theta = (angle + t)
             player.arena.newEntity(
@@ -386,7 +441,7 @@ class Arena:
         self.rooms : list[Room] = []
 
         self.particles : list[Particle] = []
-        self.entities : list[Entity] = []
+        # self.entities : list[Entity] = []
 
         self.scale : int = 75
 
@@ -400,19 +455,127 @@ class Arena:
         return found
 
     def generateRoom(self, rx : int, ry : int, dx : int = 0, dy : int = 0) -> Room:
-        room = Room(rx, ry)
-        room.blocks.append(Block(-1, -1, 2, 2))
-        room.blocks.append(Block(-9, -9, 2, 2))
-        room.blocks.append(Block(-9, 7, 2, 2))
-        room.blocks.append(Block(7, -9, 2, 2))
-        room.blocks.append(Block(7, 7, 2, 2))
+        DIFFICULTY = 1 + math.floor(math.sqrt(rx ** 2 + ry ** 2))
+        room = Room(rx, ry, 20, 20, [])
+        # room.blocks.append(Block(-1, -1, 2, 2))
+        room.blocks.append(Block(-10, -10, 3, 3))
+        room.blocks.append(Block(-10, 7, 3, 3))
+        room.blocks.append(Block(7, -10, 3, 3))
+        room.blocks.append(Block(7, 7, 3, 3))
 
         # dx = rx - self.player.rx
         # dy = ry - self.player.ry
 
+        w, a, s, d = False, False, False, False
+
+        print(rx, ry, dx, dy)
         if dx < 0:
-            room.blocks.append(Block(-9, -7, 2, 2))
-            room.blocks.append(Block(-9, -5, 2, 2))
+            room.blocks.append(Block(8, -7, 2, 5))
+            room.blocks.append(Block(8, 2, 2, 5))
+            room.ed = True
+            d = True
+        if dx > 0:
+            room.blocks.append(Block(-10, -7, 2, 5))
+            room.blocks.append(Block(-10, 2, 2, 5))
+            room.ea = True
+            a = True
+        if dy < 0:
+            room.blocks.append(Block(-7, 8, 5, 2))
+            room.blocks.append(Block(2, 8, 5, 2))
+            room.es = True
+            s = True
+        if dy > 0:
+            room.blocks.append(Block(-7, -10, 5, 2))
+            room.blocks.append(Block(2, -10, 5, 2))
+            room.ew = True
+            w = True
+
+        if not a:
+            if random.randint(1, 2) == 1:
+                can = True
+                if self.getRoom(rx - 1, ry):
+                    if not self.getRoom(rx - 1, ry).ed:
+                        can = False
+                if can:
+                    room.blocks.append(Block(-10, -7, 2, 5))
+                    room.blocks.append(Block(-10, 2, 2, 5))
+                    room.ea = True
+                else:
+                    room.blocks.append(Block(-10, -7, 2, 14))
+            else:
+                room.blocks.append(Block(-10, -7, 2, 14))
+            a = True
+
+        if not d:
+            if random.randint(1, 2) == 1:
+                can = True
+                if self.getRoom(rx + 1, ry):
+                    if not self.getRoom(rx + 1, ry).ea:
+                        can = False
+                if can:
+                    room.blocks.append(Block(8, -7, 2, 5))
+                    room.blocks.append(Block(8, 2, 2, 5))
+                    room.ed = True
+                else:
+                    room.blocks.append(Block(8, -7, 2, 14))
+            else:
+                room.blocks.append(Block(8, -7, 2, 14))
+            d = True
+
+        if not s:
+            if random.randint(1, 2) == 1:
+                can = True
+                if self.getRoom(rx, ry + 1):
+                    if not self.getRoom(rx, ry + 1).ew:
+                        can = False
+                if can:
+                    room.blocks.append(Block(-7, 8, 5, 2))
+                    room.blocks.append(Block(2, 8, 5, 2))
+                    room.es = True
+                else:
+                    room.blocks.append(Block(-7, 8, 14, 2))
+            else:
+                room.blocks.append(Block(-7, 8, 14, 2))
+            s = True
+
+        if not w:
+            if random.randint(1, 2) == 1:
+                can = True
+                if self.getRoom(rx, ry - 1):
+                    if not self.getRoom(rx, ry - 1).es:
+                        can = False
+                if can:
+                    room.blocks.append(Block(-7, -10, 5, 2))
+                    room.blocks.append(Block(2, -10, 5, 2))
+                    room.ew = True
+                else:
+                    room.blocks.append(Block(-7, -10, 14, 2))
+            else:
+                room.blocks.append(Block(-7, -10, 14, 2))
+            w = True
+
+
+
+        """
+        SPAWNING ENTITIES
+        """
+        if DIFFICULTY > 1:
+            R = random.randint(1, sum(range(1, DIFFICULTY + 1, 1)))
+            for i in range(DIFFICULTY, 0, -1):
+                if i >= R:
+                    break
+                else:
+                    R -= i
+            i = DIFFICULTY - i
+
+            # if random.randint(1, 2) == 1: #
+            for n in range(i):
+                room.entities.append(Entity(
+                    self,
+                    "spider" if random.randint(1, 5) != 1 else "big_spider",
+                    5 * math.cos((360 * n / i) / 180 * math.pi),
+                    5 * math.sin((360 * n / i) / 180 * math.pi),
+                ))
 
         return room
 
@@ -423,21 +586,64 @@ class Arena:
 
     def newEntity(self, _id : str, x : float, y : float, meta : dict = {}):
         entity = Entity(self, _id, x, y, meta)
-        self.entities.append(entity)
+        self.player.getRoom().entities.append(entity)
         return entity
 
     def tick(self):
+
+        self.player.tick()
+        self.camera.tick()
+
         for particle in self.particles:
             particle.tick()
             if particle.destroy:
                 self.particles.remove(particle)
                 del particle
 
-        self.player.tick()
-        self.camera.tick()
-
-        for entity in self.entities:
+        for entity in self.player.getRoom().entities:
             entity.tick()
             if entity.destroy:
-                self.entities.remove(entity)
+                self.player.getRoom().entities.remove(entity)
                 del entity
+
+        if self.player.x <= -self.player.getRoom().w / 2:
+            w = self.player.getRoom().w
+            self.player.rx -= 1
+            self.player.x = (w // 2 - 0.5)
+            self.player.y = 0
+
+            if not self.player.getRoom():
+                room = self.generateRoom(self.player.rx, self.player.ry, -1, 0)
+                self.rooms.append(room)
+
+        elif self.player.x >= self.player.getRoom().w / 2:
+            w = self.player.getRoom().w
+            self.player.rx += 1
+            self.player.x = -(w // 2 - 0.5)
+            self.player.y = 0
+
+            if not self.player.getRoom():
+                room = self.generateRoom(self.player.rx, self.player.ry, 1, 0)
+                self.rooms.append(room)
+
+        elif self.player.y <= -self.player.getRoom().h / 2:
+            h = self.player.getRoom().h
+            self.player.ry -= 1
+            self.player.x = 0
+            self.player.y = (h // 2 - 0.5)
+
+            if not self.player.getRoom():
+                room = self.generateRoom(self.player.rx, self.player.ry, 0, -1)
+                self.rooms.append(room)
+
+        elif self.player.y >= self.player.getRoom().h / 2:
+            h = self.player.getRoom().h
+            self.player.ry += 1
+            self.player.x = 0
+            self.player.y = -(h // 2 - 0.5)
+
+            if not self.player.getRoom():
+                room = self.generateRoom(self.player.rx, self.player.ry, 0, 1)
+                self.rooms.append(room)
+
+        # print(self.rooms)
